@@ -21,6 +21,7 @@ from __future__ import print_function
 from functools import wraps
 
 import jax.numpy as np
+from jax import vmap
 
 from jax_md import space, smap, partition
 from jax_md.interpolate import spline
@@ -52,6 +53,27 @@ def simple_spring_bond(
     length=length,
     epsilon=epsilon,
     alpha=alpha)
+
+
+def cos_squared(costheta, epsilon=1, costheta0=1, **unused_kwargs):
+  """ Simple bond-bending potential 
+  """
+  check_kwargs_time_dependence(unused_kwargs)
+  return (epsilon / f32(2)) * (costheta - costheta0) ** 2
+
+def cos_squared_bond_triple(
+    displacement, triple=None, triple_type=None,  epsilon=1, costheta0=1):
+  """Convenience wrapper to compute energy of cos-squared bond-bending potentials."""
+  epsilon = np.array(epsilon, f32)
+  costheta0 = np.array(costheta0, f32)
+  return smap.bond_triple(
+    angular_function(cos_squared),
+    displacement,
+    triple,
+    triple_type,
+    epsilon=epsilon,
+    costheta0=costheta0)
+
 
 
 def soft_sphere(dr, sigma=1, epsilon=1, alpha=2, **unused_kwargs):
@@ -297,6 +319,30 @@ def multiplicative_isotropic_cutoff(fn, r_onset, r_cutoff):
     return smooth_fn(dr) * fn(dr, *args, **kwargs)
 
   return cutoff_fn
+
+def angular_function(fn):
+  """ Takes a function that acts on the cosine of an angle and promotes it to 
+        act on two vectors, such that the angle between the vectors is the input 
+        to the original function.
+
+  Args:
+    fn: A function that takes an ndarray of cosine's of shape [n,] as well
+      as varargs.
+
+  Returns:
+    A new function that takes 2 ndarrays, both of shape [n, spatial_dimension], 
+    along with the same varargs as fn. This function calculates the ndarray of 
+    shape [n,] representing the cosines of the angles formed by corresponding 
+    vectors, and passes this to fn along with the varargs. 
+  """
+  def calc_costheta(dR1, dR2):
+    return np.dot(dR1,dR2) / (np.linalg.norm(dR1) * np.linalg.norm(dR2))
+
+  @wraps(fn)
+  def angular_fn(dRab, dRbc, *args, **kwargs):
+    costheta = vmap(calc_costheta)(dRab,dRbc)
+    return fn(costheta, *args, **kwargs)
+  return angular_fn
 
 
 def load_lammps_eam_parameters(f):
